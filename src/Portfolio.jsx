@@ -271,7 +271,7 @@ function Hero() {
         <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold tracking-tight leading-none mb-4"
           style={{ color: "#E8EDF5" }}>
           Muhammad<br />
-          <span style={{ color: "#00D4FF" }}>Shahid</span>
+          <span style={{ color: "#00D4FF" }}>Shahid Afzal</span>
         </h1>
 
         <div className="flex items-center gap-2 mt-6 mb-8">
