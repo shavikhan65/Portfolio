@@ -1,89 +1,132 @@
-name: CI/CD Pipeline
+name: CI/CD Pipeline - IIS Deployment
 
-# ─── TRIGGER ───────────────────────────────────────────────────
+# ── TRIGGER ────────────────────────────────────────────────────
 on:
   push:
     branches:
-      - main          # Only fires when code is pushed to main
+      - main
 
-# ─── ENVIRONMENT VARIABLES ─────────────────────────────────────
+# ── VARIABLES ──────────────────────────────────────────────────
 env:
-  IMAGE_NAME: my-app
-  CONTAINER_NAME: my-app-container
-  PORT: 3000
+  NODE_VERSION: '18'
+  IIS_SITE_NAME: 'Portfolio'
+  DEPLOY_PATH: 'C:\inetpub\wwwroot\Portfolio-main'
 
-# ─── JOBS ──────────────────────────────────────────────────────
+# ── JOBS ───────────────────────────────────────────────────────
 jobs:
 
   # ── JOB 1: BUILD & TEST ──────────────────────────────────────
   build-and-test:
-    name: Build & Test
-    runs-on: self-hosted        # ← Uses YOUR Windows Server 2016
+    name: Build and Test
+    runs-on: self-hosted
 
     steps:
-      # 1. Pull latest code from the repo
+      # 1. Checkout code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Build the Docker image
-      - name: Build Docker Image
-        run: |
-          docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
-          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
+      # 2. Install dependencies
+      - name: Install Dependencies
+        run: npm ci
 
-      # 3. Run tests inside the container
+      # 3. Run tests
       - name: Run Tests
-        run: |
-          docker run --rm ${{ env.IMAGE_NAME }}:latest npm test
+        run: npm test
+        continue-on-error: false   # Pipeline stops if tests fail
 
-  # ── JOB 2: PUSH TO REGISTRY ──────────────────────────────────
-  push-to-registry:
-    name: Push to Docker Hub
+      # 4. Build the app (for React/Next.js/etc)
+      - name: Build Application
+        run: npm run build
+
+      # 5. Upload build output as artifact
+      #    so the deploy job can use it
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: |
+            build/
+            public/
+            package.json
+            package-lock.json
+            web.config
+          retention-days: 1
+
+  # ── JOB 2: DEPLOY TO IIS ─────────────────────────────────────
+  deploy-to-iis:
+    name: Deploy to IIS
     runs-on: self-hosted
-    needs: build-and-test       # Only runs if job 1 passes
+    needs: build-and-test        # Only runs if build & test passes
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      # 1. Download the build artifact from Job 1
+      - name: Download Build Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-output
+          path: ./deploy-package
 
-      # Login to Docker Hub using GitHub Secrets
-      - name: Login to Docker Hub
+      # 2. Stop IIS site before deploying
+      #    prevents file-in-use errors
+      - name: Stop IIS Site
         run: |
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          Import-Module WebAdministration
+          Stop-WebSite -Name "${{ env.IIS_SITE_NAME }}"
+          Write-Host "IIS site stopped"
 
-      # Build and push with commit SHA tag (unique per commit)
-      - name: Build & Push Image
+      # 3. Clear old files from deployment folder
+      - name: Clear Old Deployment
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
-          docker tag ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
-          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          Remove-Item -Path "${{ env.DEPLOY_PATH }}\*" `
+                      -Recurse `
+                      -Force `
+                      -ErrorAction SilentlyContinue
+          Write-Host "Old files cleared"
 
-  # ── JOB 3: DEPLOY ────────────────────────────────────────────
-  deploy:
-    name: Deploy Container
-    runs-on: self-hosted
-    needs: push-to-registry     # Only runs if job 2 passes
-
-    steps:
-      - name: Deploy to Windows Server
+      # 4. Copy new build files to IIS folder
+      - name: Deploy New Files
         run: |
-          # Stop and remove old container if it exists
-          docker stop ${{ env.CONTAINER_NAME }} 2>$null; true
-          docker rm ${{ env.CONTAINER_NAME }} 2>$null; true
+          Copy-Item -Path ".\deploy-package\*" `
+                    -Destination "${{ env.DEPLOY_PATH }}" `
+                    -Recurse `
+                    -Force
+          Write-Host "New files deployed to ${{ env.DEPLOY_PATH }}"
 
-          # Pull the fresh image
-          docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+      # 5. Install production dependencies on server
+      - name: Install Production Dependencies
+        run: |
+          cd "${{ env.DEPLOY_PATH }}"
+          npm ci --only=production
 
-          # Run the new container
-          docker run -d `
-            --name ${{ env.CONTAINER_NAME }} `
-            --restart always `
-            -p ${{ env.PORT }}:${{ env.PORT }} `
-            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+      # 6. Start IIS site back up
+      - name: Start IIS Site
+        run: |
+          Import-Module WebAdministration
+          Start-WebSite -Name "${{ env.IIS_SITE_NAME }}"
+          Write-Host "IIS site started"
 
-      # Verify the container is actually running
+      # 7. Verify site is actually running
       - name: Verify Deployment
         run: |
-          Start-Sleep -Seconds 5
-          docker ps --filter "name=${{ env.CONTAINER_NAME }}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          Import-Module WebAdministration
+          $site = Get-WebSite -Name "${{ env.IIS_SITE_NAME }}"
+          Write-Host "Site Status: $($site.State)"
+          if ($site.State -ne "Started") {
+            Write-Host "ERROR: Site failed to start!"
+            exit 1
+          }
+          Write-Host "✅ Deployment successful!"
+
+      # 8. Smoke test — hit the site and check it responds
+      - name: Smoke Test
+        run: |
+          Start-Sleep -Seconds 3
+          try {
+            $response = Invoke-WebRequest -Uri "http://localhost" -UseBasicParsing
+            Write-Host "HTTP Status: $($response.StatusCode)"
+            if ($response.StatusCode -eq 200) {
+              Write-Host "✅ Site is responding correctly"
+            }
+          } catch {
+            Write-Host "⚠️ Smoke test warning: $($_.Exception.Message)"
+          }
