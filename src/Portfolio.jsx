@@ -196,7 +196,7 @@ function Nav({ active, onNav }) {
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
           <span className="font-mono text-lg font-bold" style={{ color: "#00D4FF" }}>
-            shavi<span style={{ color: "#E8EDF5" }}>@devops</span><span style={{ color: "#6B7280" }}>:~$</span>
+            Shahid<span style={{ color: "#E8EDF5" }}>@devops</span><span style={{ color: "#6B7280" }}>:~$</span>
           </span>
 
           {/* Desktop links */}
@@ -208,7 +208,7 @@ function Nav({ active, onNav }) {
                 {l}
               </button>
             ))}
-            <a href="mailto:shavi@email.com"
+            <a href="mailto:shahidssds@email.com"
               className="font-mono text-sm px-4 py-1.5 rounded border transition-all duration-200 hover:bg-cyan-400 hover:text-black"
               style={{ borderColor: "#00D4FF", color: "#00D4FF" }}>
               Hire Me
@@ -262,7 +262,7 @@ function Hero() {
       <div className="relative max-w-7xl mx-auto w-full">
         {/* Terminal prompt line */}
         <p className="font-mono text-sm sm:text-base mb-6" style={{ color: "#6B7280" }}>
-          <span style={{ color: "#00D4FF" }}>shavi@portfolio</span>
+          <span style={{ color: "#00D4FF" }}>Shahid@portfolio</span>
           <span>:</span>
           <span style={{ color: "#A78BFA" }}>~/</span>
           <span style={{ color: "#E8EDF5" }}> $ whoami</span>
@@ -495,10 +495,10 @@ function Contact() {
             </p>
             <div className="space-y-4">
               {[
-                { label: "Email", value: "shavi@email.com", href: "mailto:shavi@email.com" },
+                { label: "Email", value: "shahidssds65@email.com", href: "mailto:shahidssds65@email.com" },
                 { label: "Location", value: "Lahore, Pakistan", href: null },
-                { label: "GitHub", value: "github.com/shavi", href: "#" },
-                { label: "LinkedIn", value: "linkedin.com/in/shavi", href: "#" },
+                { label: "GitHub", value: "github.com/iamshahid65", href: "#" },
+                { label: "LinkedIn", value: "linkedin.com/in/Shahid", href: "#" },
               ].map(({ label, value, href }) => (
                 <div key={label} className="flex items-center gap-4">
                   <span className="font-mono text-xs w-20 flex-shrink-0" style={{ color: "#6B7280" }}>{label}</span>
@@ -556,7 +556,7 @@ function Footer() {
   return (
     <footer className="py-8 px-4 sm:px-6 text-center" style={{ background: "#0D0F14", borderTop: "1px solid #1A1D24" }}>
       <p className="font-mono text-xs" style={{ color: "#6B7280" }}>
-        <span style={{ color: "#00D4FF" }}>shavi@portfolio</span>:~$ Built with React + Tailwind CSS · {new Date().getFullYear()}
+        <span style={{ color: "#00D4FF" }}>Shahid@portfolio</span>:~$ Built with React + Tailwind CSS · {new Date().getFullYear()}
       </p>
     </footer>
   );
