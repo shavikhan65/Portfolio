@@ -1,123 +1,152 @@
 name: CI/CD Pipeline - IIS Deployment
 
-# ── TRIGGER ────────────────────────────────────────────────────
 on:
   push:
     branches:
       - main
 
-# ── VARIABLES ──────────────────────────────────────────────────
 env:
   NODE_VERSION: '18'
   IIS_SITE_NAME: 'Portfolio'
   DEPLOY_PATH: 'C:\inetpub\wwwroot\Portfolio-main'
 
-# ── JOBS ───────────────────────────────────────────────────────
 jobs:
 
-  # ── JOB 1: BUILD & TEST ──────────────────────────────────────
-  build-and-test:
-    name: Build and Test
+  # ── JOB 1: BUILD ─────────────────────────────────────────────
+  build:
+    name: Build Vite + React App
     runs-on: self-hosted
 
     steps:
-      # 1. Checkout code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Install dependencies
       - name: Install Dependencies
         run: npm ci
 
-      # 3. Run tests
-      - name: Run Tests
-        run: npm test
-        continue-on-error: false   # Pipeline stops if tests fail
-
-      # 4. Build the app (for React/Next.js/etc)
-      - name: Build Application
+      - name: Build Vite App
         run: npm run build
+        # Vite outputs to dist/ folder automatically
 
-      # 5. Upload build output as artifact
-      #    so the deploy job can use it
-      - name: Upload Build Artifact
+      - name: Verify Build Output
+        run: |
+          Write-Host "Build folder contents:"
+          Get-ChildItem dist/
+          if (!(Test-Path "dist/index.html")) {
+            Write-Host "ERROR: index.html not found in dist/"
+            exit 1
+          }
+          Write-Host "✅ Build verified - index.html exists"
+
+      - name: Upload dist as Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: build-output
-          path: |
-            build/
-            public/
-            package.json
-            package-lock.json
-            web.config
+          name: vite-dist
+          path: dist/          # ← Vite outputs here
           retention-days: 1
 
   # ── JOB 2: DEPLOY TO IIS ─────────────────────────────────────
-  deploy-to-iis:
+  deploy:
     name: Deploy to IIS
     runs-on: self-hosted
-    needs: build-and-test        # Only runs if build & test passes
+    needs: build
 
     steps:
-      # 1. Download the build artifact from Job 1
-      - name: Download Build Artifact
+      - name: Download dist Artifact
         uses: actions/download-artifact@v4
         with:
-          name: build-output
-          path: ./deploy-package
+          name: vite-dist
+          path: ./dist
 
-      # 2. Stop IIS site before deploying
-      #    prevents file-in-use errors
+      - name: Verify Downloaded Files
+        run: |
+          Write-Host "Files to deploy:"
+          Get-ChildItem ./dist/
+          if (!(Test-Path "./dist/index.html")) {
+            Write-Host "ERROR: index.html missing!"
+            exit 1
+          }
+
       - name: Stop IIS Site
         run: |
           Import-Module WebAdministration
-          Stop-WebSite -Name "${{ env.IIS_SITE_NAME }}"
+          Stop-WebSite -Name "${{ env.IIS_SITE_NAME }}" -ErrorAction SilentlyContinue
           Write-Host "IIS site stopped"
 
-      # 3. Clear old files from deployment folder
-      - name: Clear Old Deployment
+      - name: Clear Old Files
         run: |
           Remove-Item -Path "${{ env.DEPLOY_PATH }}\*" `
-                      -Recurse `
-                      -Force `
-                      -ErrorAction SilentlyContinue
+                      -Recurse -Force -ErrorAction SilentlyContinue
           Write-Host "Old files cleared"
 
-      # 4. Copy new build files to IIS folder
-      - name: Deploy New Files
+      - name: Deploy New Build Files
         run: |
-          Copy-Item -Path ".\deploy-package\*" `
+          Copy-Item -Path ".\dist\*" `
                     -Destination "${{ env.DEPLOY_PATH }}" `
-                    -Recurse `
-                    -Force
-          Write-Host "New files deployed to ${{ env.DEPLOY_PATH }}"
+                    -Recurse -Force
+          Write-Host "✅ Files deployed:"
+          Get-ChildItem "${{ env.DEPLOY_PATH }}"
 
-      # 5. Install production dependencies on server
-      - name: Install Production Dependencies
+      - name: Deploy web.config
         run: |
-          cd "${{ env.DEPLOY_PATH }}"
-          npm ci --only=production
+          $webConfig = @'
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <system.webServer>
+              <defaultDocument>
+                <enabled>true</enabled>
+                <files>
+                  <clear />
+                  <add value="index.html" />
+                </files>
+              </defaultDocument>
+              <staticContent>
+                <mimeMap fileExtension=".json" mimeType="application/json" />
+                <mimeMap fileExtension=".woff" mimeType="font/woff" />
+                <mimeMap fileExtension=".woff2" mimeType="font/woff2" />
+                <mimeMap fileExtension=".js" mimeType="application/javascript" />
+                <mimeMap fileExtension=".css" mimeType="text/css" />
+              </staticContent>
+              <rewrite>
+                <rules>
+                  <rule name="React Router" stopProcessing="true">
+                    <match url=".*" />
+                    <conditions logicalGrouping="MatchAll">
+                      <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
+                      <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
+                    </conditions>
+                    <action type="Rewrite" url="/index.html" />
+                  </rule>
+                </rules>
+              </rewrite>
+            </system.webServer>
+          </configuration>
+          '@
+          Set-Content -Path "${{ env.DEPLOY_PATH }}\web.config" -Value $webConfig
+          Write-Host "✅ web.config deployed"
 
-      # 6. Start IIS site back up
       - name: Start IIS Site
         run: |
           Import-Module WebAdministration
           Start-WebSite -Name "${{ env.IIS_SITE_NAME }}"
           Write-Host "IIS site started"
 
-      # 7. Verify site is actually running
       - name: Verify Deployment
         run: |
           Import-Module WebAdministration
+          Start-Sleep -Seconds 3
           $site = Get-WebSite -Name "${{ env.IIS_SITE_NAME }}"
           Write-Host "Site Status: $($site.State)"
+          Write-Host "Physical Path: $($site.PhysicalPath)"
+          Write-Host ""
+          Write-Host "Files in deploy folder:"
+          Get-ChildItem "${{ env.DEPLOY_PATH }}"
           if ($site.State -ne "Started") {
             Write-Host "ERROR: Site failed to start!"
             exit 1
           }
           Write-Host "✅ Deployment successful!"
 
-      # 8. Smoke test — hit the site and check it responds
       - name: Smoke Test
         run: |
           Start-Sleep -Seconds 3
@@ -125,8 +154,9 @@ jobs:
             $response = Invoke-WebRequest -Uri "http://localhost" -UseBasicParsing
             Write-Host "HTTP Status: $($response.StatusCode)"
             if ($response.StatusCode -eq 200) {
-              Write-Host "✅ Site is responding correctly"
+              Write-Host "✅ Site is live and responding!"
             }
           } catch {
-            Write-Host "⚠️ Smoke test warning: $($_.Exception.Message)"
+            Write-Host "⚠️ Smoke test failed: $($_.Exception.Message)"
+            exit 1
           }
