@@ -12,151 +12,128 @@ env:
 
 jobs:
 
-  # ── JOB 1: BUILD ─────────────────────────────────────────────
   build:
-    name: Build Vite + React App
     runs-on: self-hosted
 
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Install Dependencies
         run: npm ci
 
-      - name: Build Vite App
+      - name: Build
         run: npm run build
-        # Vite outputs to dist/ folder automatically
 
-      - name: Verify Build Output
+      - name: Verify Build
+        shell: powershell
         run: |
-          Write-Host "Build folder contents:"
-          Get-ChildItem dist/
           if (!(Test-Path "dist/index.html")) {
-            Write-Host "ERROR: index.html not found in dist/"
-            exit 1
+            throw "index.html not found"
           }
-          Write-Host "✅ Build verified - index.html exists"
 
-      - name: Upload dist as Artifact
+          if (!(Test-Path "dist/web.config")) {
+            throw "web.config not found"
+          }
+
+          Get-ChildItem dist
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: vite-dist
-          path: dist/          # ← Vite outputs here
-          retention-days: 1
+          path: dist/
 
-  # ── JOB 2: DEPLOY TO IIS ─────────────────────────────────────
   deploy:
-    name: Deploy to IIS
-    runs-on: self-hosted
     needs: build
+    runs-on: self-hosted
 
     steps:
-      - name: Download dist Artifact
+
+      - name: Download Artifact
         uses: actions/download-artifact@v4
         with:
           name: vite-dist
-          path: ./dist
+          path: dist
 
-      - name: Verify Downloaded Files
-        run: |
-          Write-Host "Files to deploy:"
-          Get-ChildItem ./dist/
-          if (!(Test-Path "./dist/index.html")) {
-            Write-Host "ERROR: index.html missing!"
-            exit 1
-          }
-
-      - name: Stop IIS Site
+      - name: Stop IIS
+        shell: powershell
         run: |
           Import-Module WebAdministration
           Stop-WebSite -Name "${{ env.IIS_SITE_NAME }}" -ErrorAction SilentlyContinue
-          Write-Host "IIS site stopped"
 
-      - name: Clear Old Files
+      - name: Clean Deployment Folder
+        shell: powershell
         run: |
-          Remove-Item -Path "${{ env.DEPLOY_PATH }}\*" `
-                      -Recurse -Force -ErrorAction SilentlyContinue
-          Write-Host "Old files cleared"
+          if (Test-Path "${{ env.DEPLOY_PATH }}") {
+              Remove-Item "${{ env.DEPLOY_PATH }}\*" -Recurse -Force
+          }
 
-      - name: Deploy New Build Files
+      - name: Deploy Files
+        shell: powershell
         run: |
-          Copy-Item -Path ".\dist\*" `
-                    -Destination "${{ env.DEPLOY_PATH }}" `
-                    -Recurse -Force
-          Write-Host "✅ Files deployed:"
+          Copy-Item "dist\*" "${{ env.DEPLOY_PATH }}" -Recurse -Force
+
+      - name: Verify Deployment Files
+        shell: powershell
+        run: |
           Get-ChildItem "${{ env.DEPLOY_PATH }}"
 
-      - name: Deploy web.config
-        run: |
-          $webConfig = @'
-          <?xml version="1.0" encoding="utf-8"?>
-          <configuration>
-            <system.webServer>
-              <defaultDocument>
-                <enabled>true</enabled>
-                <files>
-                  <clear />
-                  <add value="index.html" />
-                </files>
-              </defaultDocument>
-              <staticContent>
-                <mimeMap fileExtension=".json" mimeType="application/json" />
-                <mimeMap fileExtension=".woff" mimeType="font/woff" />
-                <mimeMap fileExtension=".woff2" mimeType="font/woff2" />
-                <mimeMap fileExtension=".js" mimeType="application/javascript" />
-                <mimeMap fileExtension=".css" mimeType="text/css" />
-              </staticContent>
-              <rewrite>
-                <rules>
-                  <rule name="React Router" stopProcessing="true">
-                    <match url=".*" />
-                    <conditions logicalGrouping="MatchAll">
-                      <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="true" />
-                      <add input="{REQUEST_FILENAME}" matchType="IsDirectory" negate="true" />
-                    </conditions>
-                    <action type="Rewrite" url="/index.html" />
-                  </rule>
-                </rules>
-              </rewrite>
-            </system.webServer>
-          </configuration>
-          '@
-          Set-Content -Path "${{ env.DEPLOY_PATH }}\web.config" -Value $webConfig
-          Write-Host "✅ web.config deployed"
+          if (!(Test-Path "${{ env.DEPLOY_PATH }}\index.html")) {
+            throw "index.html missing"
+          }
 
-      - name: Start IIS Site
+          if (!(Test-Path "${{ env.DEPLOY_PATH }}\web.config")) {
+            throw "web.config missing"
+          }
+
+      - name: Start IIS
+        shell: powershell
         run: |
           Import-Module WebAdministration
           Start-WebSite -Name "${{ env.IIS_SITE_NAME }}"
-          Write-Host "IIS site started"
 
-      - name: Verify Deployment
-        run: |
-          Import-Module WebAdministration
-          Start-Sleep -Seconds 3
-          $site = Get-WebSite -Name "${{ env.IIS_SITE_NAME }}"
-          Write-Host "Site Status: $($site.State)"
-          Write-Host "Physical Path: $($site.PhysicalPath)"
-          Write-Host ""
-          Write-Host "Files in deploy folder:"
-          Get-ChildItem "${{ env.DEPLOY_PATH }}"
-          if ($site.State -ne "Started") {
-            Write-Host "ERROR: Site failed to start!"
-            exit 1
-          }
-          Write-Host "✅ Deployment successful!"
+      - name: Wait for IIS
+        shell: powershell
+        run: Start-Sleep 5
 
       - name: Smoke Test
+        shell: powershell
         run: |
-          Start-Sleep -Seconds 3
           try {
-            $response = Invoke-WebRequest -Uri "http://localhost" -UseBasicParsing
-            Write-Host "HTTP Status: $($response.StatusCode)"
-            if ($response.StatusCode -eq 200) {
-              Write-Host "✅ Site is live and responding!"
-            }
-          } catch {
-            Write-Host "⚠️ Smoke test failed: $($_.Exception.Message)"
-            exit 1
+              $response = Invoke-WebRequest `
+                  -Uri "http://localhost" `
+                  -UseBasicParsing `
+                  -ErrorAction Stop
+
+              Write-Host "Status: $($response.StatusCode)"
+
+              if ($response.StatusCode -ne 200) {
+                  throw "Unexpected status code"
+              }
+
+              Write-Host "Site is working."
+
+          }
+          catch {
+
+              Write-Host "Smoke Test Failed"
+
+              Write-Host $_.Exception.Message
+
+              Write-Host ""
+              Write-Host "===== Deployed Files ====="
+
+              Get-ChildItem "${{ env.DEPLOY_PATH }}"
+
+              Write-Host ""
+              Write-Host "===== web.config ====="
+
+              Get-Content "${{ env.DEPLOY_PATH }}\web.config"
+
+              exit 1
           }
