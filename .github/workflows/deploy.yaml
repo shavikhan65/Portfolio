@@ -1,37 +1,89 @@
-name: Deploy React to IIS
+name: CI/CD Pipeline
 
+# ─── TRIGGER ───────────────────────────────────────────────────
 on:
   push:
     branches:
-      - main
+      - main          # Only fires when code is pushed to main
 
+# ─── ENVIRONMENT VARIABLES ─────────────────────────────────────
+env:
+  IMAGE_NAME: my-app
+  CONTAINER_NAME: my-app-container
+  PORT: 3000
+
+# ─── JOBS ──────────────────────────────────────────────────────
 jobs:
 
-  deploy:
-
-    runs-on: windows-latest
+  # ── JOB 1: BUILD & TEST ──────────────────────────────────────
+  build-and-test:
+    name: Build & Test
+    runs-on: self-hosted        # ← Uses YOUR Windows Server 2016
 
     steps:
+      # 1. Pull latest code from the repo
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Checkout
-      uses: actions/checkout@v4
+      # 2. Build the Docker image
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} .
+          docker tag ${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.IMAGE_NAME }}:latest
 
-    - name: Setup Node
-      uses: actions/setup-node@v4
-      with:
-        node-version: 22
+      # 3. Run tests inside the container
+      - name: Run Tests
+        run: |
+          docker run --rm ${{ env.IMAGE_NAME }}:latest npm test
 
-    - name: Install Packages
-      run: npm ci
+  # ── JOB 2: PUSH TO REGISTRY ──────────────────────────────────
+  push-to-registry:
+    name: Push to Docker Hub
+    runs-on: self-hosted
+    needs: build-and-test       # Only runs if job 1 passes
 
-    - name: Build React
-      run: npm run build
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-    - name: Deploy to IIS
-      uses: microsoft/iis-deploy@v1
-      with:
-        website-name: ${{ secrets.SITE_NAME }}
-        server: https://${{ secrets.SERVER }}:8172/msdeploy.axd
-        username: ${{ secrets.USERNAME }}
-        password: ${{ secrets.PASSWORD }}
-        package: ./dist
+      # Login to Docker Hub using GitHub Secrets
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      # Build and push with commit SHA tag (unique per commit)
+      - name: Build & Push Image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+          docker tag ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+
+  # ── JOB 3: DEPLOY ────────────────────────────────────────────
+  deploy:
+    name: Deploy Container
+    runs-on: self-hosted
+    needs: push-to-registry     # Only runs if job 2 passes
+
+    steps:
+      - name: Deploy to Windows Server
+        run: |
+          # Stop and remove old container if it exists
+          docker stop ${{ env.CONTAINER_NAME }} 2>$null; true
+          docker rm ${{ env.CONTAINER_NAME }} 2>$null; true
+
+          # Pull the fresh image
+          docker pull ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+
+          # Run the new container
+          docker run -d `
+            --name ${{ env.CONTAINER_NAME }} `
+            --restart always `
+            -p ${{ env.PORT }}:${{ env.PORT }} `
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+
+      # Verify the container is actually running
+      - name: Verify Deployment
+        run: |
+          Start-Sleep -Seconds 5
+          docker ps --filter "name=${{ env.CONTAINER_NAME }}" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
