@@ -6,7 +6,7 @@ on:
       - main
 
 env:
-  NODE_VERSION: '18'
+  NODE_VERSION: '22'
   IIS_SITE_NAME: 'Portfolio'
   DEPLOY_PATH: 'C:\inetpub\wwwroot\Portfolio-main'
 
