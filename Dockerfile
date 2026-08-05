@@ -1,5 +1,4 @@
-# Build stage
-FROM node:18-alpine AS builder
+FROM node:18-windowsservercore-ltsc2022 AS builder
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --only=production
